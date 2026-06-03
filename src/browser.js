@@ -3,9 +3,24 @@
 // 浏览器上下文管理：用真实 Chrome + 持久化 profile 启动，注入 stealth 脚本。
 // 这是整个工具抗反爬的地基：真实指纹 + 老化登录态 + 隐藏自动化特征。
 
+const fs = require('fs');
+const path = require('path');
 const { chromium } = require('playwright');
 const { USER_DATA_DIR } = require('./config');
 const { logger, sleep } = require('./util');
+
+// 清掉持久化 profile 的「会话恢复」状态（仅 tab/session 文件，绝不碰 Cookies/Local Storage 等登录态）。
+// 实证（2026-06-03）：Chrome 每次退出都会写 Current/Last Session/Tabs；下次启动尝试恢复上次标签，
+// 会和 Playwright 的 getPage/goto 打架，导致页面卡在 about:blank（goto 返回 200 但 body 为空、
+// 等不到任何元素）。每次启动前清一遍，保证从干净状态导航。Singleton* 锁不动（用于并发检测）。
+function cleanSessionState() {
+  const def = path.join(USER_DATA_DIR, 'Default');
+  const files = ['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'];
+  for (const f of files) {
+    try { fs.rmSync(path.join(def, f), { force: true }); } catch (_) {}
+  }
+  try { fs.rmSync(path.join(def, 'Sessions'), { recursive: true, force: true }); } catch (_) {}
+}
 
 // 持久化 profile 同一时刻只能被一个 Chrome 进程占用。识别这类“被占用”错误，
 // 以便给出友好提示（而不是抛 Playwright 的 cryptic 报错）。
@@ -78,6 +93,9 @@ const STEALTH_SCRIPT = `
 // 启动持久化上下文。优先用系统 Chrome（channel: 'chrome'），UA/指纹最真实；
 // 找不到则回退到 Playwright 自带 Chromium 并告警。
 async function openContext({ headless = false } = {}) {
+  // 启动前清掉脏的会话恢复状态，避免页面卡在 about:blank（见 cleanSessionState 注释）
+  cleanSessionState();
+
   const baseOpts = {
     headless,
     viewport: { width: 1440, height: 900 },
@@ -120,10 +138,17 @@ async function openContext({ headless = false } = {}) {
   return context;
 }
 
-// 拿到上下文里第一个 page（持久化上下文启动时会带一个空白页），没有就新建
+// 新开一个干净 page 来驱动。
+// 实证（2026-06-03）：持久化上下文启动时自带一个初始 about:blank 页，直接复用它去 goto
+// 偶发会和浏览器对该页的初始化竞态——goto 返回 200 但页面又被恢复成 about:blank（body 空、
+// 等不到任何元素，表现为"时好时坏"）。改为新开一页驱动、关掉多余空白页，规避竞态。
 async function getPage(context) {
-  const pages = context.pages();
-  const page = pages.length ? pages[0] : await context.newPage();
+  const page = await context.newPage();
+  for (const p of context.pages()) {
+    if (p !== page && p.url() === 'about:blank') {
+      try { await p.close(); } catch (_) { /* 关闭失败不影响 */ }
+    }
+  }
   return page;
 }
 

@@ -14,7 +14,7 @@ const {
   humanClick,
   humanDelay,
 } = require('./anticrawl');
-const { isLoggedInOnPage } = require('./auth');
+const { isLoggedInOnPage, hasLoginCookie } = require('./auth');
 const { normalizeJobUrl } = require('./jobs');
 
 const limiter = new RateLimiter(5000, 12000); // 写操作更保守，间隔更长
@@ -25,6 +25,12 @@ async function greet({ job, message, headless = false }) {
   const context = await openContext({ headless });
   try {
     const page = await getPage(context);
+    // 未登录前置闸门（离线，导航前）：未登录打招呼必失败且会撞墙烧 IP，先拦下；
+    // 导航后另有 isLoggedInOnPage 兜底（cookie 在但已过期的情况）。
+    if (!(await hasLoginCookie(context))) {
+      logger.error('未登录，无法打招呼。请先运行：boss login');
+      return false;
+    }
     await limiter.wait('greet');
     logger.info(`准备与岗位 HR 打招呼：${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded' });

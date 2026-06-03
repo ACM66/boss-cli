@@ -14,8 +14,8 @@ program
 
 program
   .command('login')
-  .description('扫码登录（弹出浏览器窗口，用 BOSS App 扫码），登录态本地持久化复用')
-  .option('-t, --timeout <seconds>', '等待扫码的最长秒数', '180')
+  .description('微信扫码登录：渲染二维码到 qr.png(VSCode标签)+qr.html(浏览器)，扫码后登录态本地持久化复用')
+  .option('-t, --timeout <seconds>', '等待扫码的最长秒数', '600')
   .action(async (opts) => {
     const { login } = require('../src/auth');
     const ok = await login({ timeoutMs: parseInt(opts.timeout, 10) * 1000 });

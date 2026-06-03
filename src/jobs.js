@@ -8,6 +8,7 @@ const { openContext, getPage } = require('./browser');
 const { BASE_URL, CITY_CODES, SELECTORS } = require('./config');
 const { logger, printTable, warnIfUncalibrated } = require('./util');
 const { RateLimiter, assertNoRiskControl, humanScroll } = require('./anticrawl');
+const { hasLoginCookie } = require('./auth');
 
 const limiter = new RateLimiter(3000, 7000);
 
@@ -67,6 +68,13 @@ async function search({ query, city, limit = 20, headless = true }) {
   const context = await openContext({ headless });
   try {
     const page = await getPage(context);
+    // 未登录前置闸门（离线，导航前）：BOSS 对未登录的岗位搜索会跳 403 访问受限墙、
+    // 并触发 IP 频控（实证见 README「已知约束」）。在 page.goto 之前就拦下，避免白烧 IP。
+    if (!(await hasLoginCookie(context))) {
+      throw new Error(
+        '未登录：BOSS 对未登录的岗位搜索会跳 403 访问受限墙并触发 IP 频控，已在导航前拦下。请先运行：boss login'
+      );
+    }
     await limiter.wait('search');
     logger.info(`搜索：${query} @ city=${cityCode}`);
     await page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -160,6 +168,12 @@ async function detail({ job, headless = true }) {
   const context = await openContext({ headless });
   try {
     const page = await getPage(context);
+    // 未登录前置闸门（离线，导航前）：未登录访问岗位详情同样会撞 403 墙并触发频控，先拦下
+    if (!(await hasLoginCookie(context))) {
+      throw new Error(
+        '未登录：BOSS 对未登录的岗位详情访问会跳 403 访问受限墙并触发 IP 频控，已在导航前拦下。请先运行：boss login'
+      );
+    }
     await limiter.wait('detail');
     logger.info(`打开岗位详情：${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded' });
