@@ -1,0 +1,8 @@
+node_modules/
+log/
+*.log
+*.tgz
+.DS_Store
+# 浏览器持久化 profile / 登录态绝不入库
+.boss-cli/
+userdata/
