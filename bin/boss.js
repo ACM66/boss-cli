@@ -32,12 +32,12 @@ program
 
 program
   .command('login')
-  .description('微信扫码登录：渲染二维码到 qr.png(VSCode标签)+qr.html(浏览器)，扫码后登录态本地持久化复用')
-  .option('-t, --timeout <seconds>', '等待扫码的最长秒数', '600')
+  .description('扫码登录：切到页面的扫码入口并渲染二维码到 qr.png(VSCode标签)+qr.html(浏览器)；页面不给二维码时等你在专用 Chrome 窗口里自行登录')
+  .option('-t, --timeout <seconds>', '等待登录完成的最长秒数', '600')
   .action(async (opts) => {
     const { login } = require('../src/auth');
     const seconds = Number(opts.timeout);
-    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 1800) throw new Error('扫码等待时间必须是 1–1800 秒的整数');
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 1800) throw new Error('登录等待时间必须是 1–1800 秒的整数');
     const ok = await login({ timeoutMs: seconds * 1000 });
     process.exit(ok ? 0 : 1);
   });

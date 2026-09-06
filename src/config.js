@@ -45,7 +45,10 @@ const CITY_CODES = {
 };
 
 // 按操作记录真实页面验收；查询和发送前检查通过不代表消息发送已验收。
-const SELECTORS_CALIBRATED_AT = { search: '2026-09-05', detail: '2026-09-05', greet: null };
+// greet 的 2026-09-06 指 startChat 按钮在真实岗位页建立联系已验收（证据见
+// log/2026-09-06-e2e-result.md 与 log/e2e-live-2026-09-06.json 的 greet_contact）；
+// 独立 CLI 的 `greet -m` 自定义消息仍未适配，由 src/chat.js 单独拦截。
+const SELECTORS_CALIBRATED_AT = { search: '2026-09-05', detail: '2026-09-05', greet: '2026-09-06' };
 
 // 本工具的保守访问预算，不代表平台公布或验证过的安全阈值。
 const ACCESS_POLICY = {

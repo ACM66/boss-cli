@@ -112,22 +112,43 @@ async function openWebsite({ existingOnly = false } = {}) {
 // ── 扫码登录（二维码渲染式）────────────────────────────────────────────────
 // 不再依赖「弹出的浏览器窗口」（窗口可能跑到别的桌面/被挡住，用户根本看不到）。
 // 抓取登录二维码 → 落地为可查看的 qr.png（VSCode 标签）+ 自刷新 qr.html（浏览器），
-// 用户扫码后登录态持久化到 profile。二维码随 BOSS 刷新而刷新，不怕扫码前过期。
+// 用户扫码后登录态持久化到 profile。
 //
-// 实证（2026-06-03）：BOSS 默认是「微信扫码」安全登录，二维码是 img.mini-qrcode（200x200，
-// src 来自 img.bosszhipin.com/.../weixin-service/...）。用微信扫，不是 BOSS App。
+// 实证（2026-09-06，www.zhipin.com 登录组件真实 DOM）：登录页默认渲染
+// .sign-form.sign-sms（短信验证码表单），二维码不在初始 DOM 里，必须先点扫码入口；
+// 扫码表单 .sign-form.sign-scan 里的码是 .qrcodeimg-box > img（无 class，src 为
+// /wapi/zppassport/qrcode/dispatcher?qrId=…），提示文案是「使用 BOSS直聘 APP 扫码登录」；
+// 码过期时 .invalid-box 盖住图片显示「请重新刷新二维码」，必须点其中的按钮才换新码。
+// 2026-06-03 另观察到 img.mini-qrcode（微信服务号码），入口是页面底部的 .wx-login-btn。
+// 扫码方式（BOSS App / 微信）随入口不同，一律读页面自己的提示，不写死。
 
 const QR_PNG = path.join(ROOT_DIR, 'qr.png');
 const QR_HTML = path.join(ROOT_DIR, 'qr.html');
 const QR_DIAGNOSTIC_PNG = path.join(ROOT_DIR, 'login-diagnostic.png');
 const QR_SELECTORS = [
+  '.qrcodeimg-box img',
   'img.mini-qrcode',
+  'img[src*="/qrcode/"]',
   'img[src*="weixin-service"]',
-  'img[src*="qrcode"]',
   '.qr-img-box img',
   '.qrcode img',
   '.login-qr img',
 ];
+
+// 二维码入口开关：站内切换在前，会跳出站点的微信入口放最后。
+const QR_ENTRY_SELECTORS = [
+  '.sign-tab .link-scan',
+  '.link-scan',
+  '.btn-sign-switch.ewm-switch',
+  '.btn-switch.ewm-switch',
+  '.ewm-switch',
+  '.wx-login-btn',
+];
+
+// 二维码失效后的刷新按钮；不点它只会一直截到同一张过期的码。
+const QR_REFRESH_SELECTORS = ['.qrcodeimg-box .invalid-box .btn', '.qrcode-box .invalid-box .btn'];
+
+const DEFAULT_QR_HINT = '请按 BOSS 登录页上二维码旁的提示扫码';
 
 // 仅截图已经加载的二维码图片；整页截图不能作为二维码成功的证据。
 async function captureQr(page) {
@@ -145,20 +166,80 @@ async function captureQr(page) {
   return null;
 }
 
+// 二维码不在初始 DOM 里：先按已观察到的入口逐个切换，切一次等一次真实图片加载。
+// 返回尝试过的入口，供失败时报清楚「点了什么、页面上有什么」。
+async function acquireQr(page, { entryTimeoutMs = 8000 } = {}) {
+  const direct = await captureQr(page);
+  if (direct) return { qr: direct, tried: [] };
+  const tried = [];
+  for (const selector of QR_ENTRY_SELECTORS) {
+    const entry = await firstVisible(page, [selector]);
+    if (!entry) continue;
+    // 候选之间会命中同一个元素（如 .sign-tab .link-scan 与 .link-scan），点过就跳过，别白等一轮
+    const fresh = await entry
+      .evaluate((el) => (el.dataset.bossQrEntryTried ? false : Boolean((el.dataset.bossQrEntryTried = '1'))))
+      .catch(() => true);
+    if (!fresh) continue;
+    const label = ((await entry.textContent().catch(() => '')) || '').trim().slice(0, 12);
+    tried.push(label ? `${selector}（${label}）` : selector);
+    try {
+      await entry.click();
+    } catch (error) {
+      logger.debug(`扫码入口 ${selector} 点击失败：${error.message}`);
+      continue;
+    }
+    const deadline = Date.now() + entryTimeoutMs;
+    do {
+      await sleep(400);
+      const qr = await captureQr(page);
+      if (qr) return { qr: { ...qr, entry: selector }, tried };
+    } while (Date.now() < deadline);
+  }
+  return { qr: null, tried };
+}
+
+// 扫码方式由页面自己声明（BOSS App 或微信），不按入口猜。
+async function readQrHint(page) {
+  try {
+    const text = await page.evaluate(() => {
+      const box = document.querySelector('.qrcode-box, .qr-img-box, .login-qr');
+      return (box?.querySelector('p, .tip, h3')?.innerText || '').replace('扫码帮助', '').trim();
+    });
+    return text && text.length <= 40 ? text : DEFAULT_QR_HINT;
+  } catch (_) {
+    return DEFAULT_QR_HINT;
+  }
+}
+
+// 码过期后 BOSS 不会自己换新的，要点「点击刷新」；没过期时什么也不做。
+async function refreshExpiredQr(page) {
+  const button = await firstVisible(page, QR_REFRESH_SELECTORS);
+  if (!button) return false;
+  await button.click();
+  logger.debug('二维码已失效，已点击页面上的刷新按钮');
+  return true;
+}
+
 function atomicWrite(file, data) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, data, { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
-function qrHtml(b64) {
+// 提示文案来自网页，必须转义后再进 HTML。
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function qrHtml(b64, hint) {
+  const tip = escapeHtml(hint);
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="3"><title>BOSS 扫码登录</title></head>
 <body style="font-family:-apple-system,system-ui,sans-serif;text-align:center;background:#f5f5f5;padding:28px">
-<h2 style="color:#222;margin:8px">微信扫一扫，登录 BOSS 直聘</h2>
+<h2 style="color:#222;margin:8px">${tip}</h2>
 <img src="data:image/png;base64,${b64}" width="260"
  style="border:1px solid #ddd;border-radius:10px;background:#fff;padding:10px">
-<p style="color:#999;font-size:13px">用<b>微信</b>扫码并在手机上确认；二维码每 3 秒自动刷新，扫码成功后本页会显示「登录成功」</p>
+<p style="color:#999;font-size:13px">按上面这行页面原文的方式扫码并在手机上确认；本页每 3 秒刷新一次二维码，登录成功后会显示「登录成功」</p>
 </body></html>`;
 }
 
@@ -169,9 +250,9 @@ function doneHtml() {
 <p style="color:#555">登录态已保存到 boss-cli，本页可以关闭了。</p></body></html>`;
 }
 
-function persistQr(buf) {
+function persistQr(buf, hint) {
   atomicWrite(QR_PNG, buf);
-  atomicWrite(QR_HTML, qrHtml(buf.toString('base64')));
+  atomicWrite(QR_HTML, qrHtml(buf.toString('base64'), hint));
 }
 
 // 打开查看器：VSCode 图片标签（主，随文件刷新自动重载）+ 默认浏览器自刷新页（备）。
@@ -181,10 +262,11 @@ function openQrViewers() {
   execFile('open', [QR_HTML], () => {});
 }
 
-// 扫码登录：渲染二维码到可查看文件，轮询检测登录成功。
+// 扫码登录：切到扫码入口取二维码，渲染到可查看文件，轮询检测登录成功。
 // 关键：用 headless:false（真窗口）。实证（2026-06-03）BOSS 登录页会反爬无头模式——
 // headless:true 下页面被 blank/抽掉二维码（about:blank、hasQr=false）；真窗口则稳定出码。
 // 窗口会弹出但无需用户去找：二维码会被截图渲染到 qr.png（VSCode 标签）+ qr.html（浏览器）。
+// 页面没给二维码时不报错退出，改为等用户在这个窗口里自行登录（短信验证码等）。
 async function login({ timeoutMs = 600000 } = {}) {
   const context = await openContext({ headless: false });
   try {
@@ -203,9 +285,9 @@ async function login({ timeoutMs = 600000 } = {}) {
     logger.info('打开 BOSS 登录页，准备渲染二维码...');
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
     await assertNoRiskControl(page); // 撞墙（IP 频控）会在这里抛 wall，立即停
-    // 二维码图是异步从 CDN 加载的，先等它出现再截
+    // 登录组件是异步渲染的：二维码、扫码入口、登录标志三者先等到任意一个
     await page
-      .waitForSelector([...QR_SELECTORS, '.wx-login-btn', ...SELECTORS.loggedInMark].join(', '), { timeout: 15000 })
+      .waitForSelector([...QR_SELECTORS, ...QR_ENTRY_SELECTORS, ...SELECTORS.loggedInMark].join(', '), { timeout: 15000 })
       .catch(() => {});
     await sleep(800);
     await assertNoRiskControl(page);
@@ -215,29 +297,27 @@ async function login({ timeoutMs = 600000 } = {}) {
       return true;
     }
 
-    let first = await captureQr(page);
-    if (!first) {
-      const switchToWechat = await firstVisible(page, ['.wx-login-btn']);
-      if (switchToWechat) {
-        logger.info('当前为验证码登录，切换到微信扫码入口');
-        await switchToWechat.click();
-        await page.waitForSelector(QR_SELECTORS.join(', '), { timeout: 15000 });
-        first = await captureQr(page);
-      }
-    }
-    if (!first) {
+    const { qr: first, tried } = await acquireQr(page);
+    let hint = DEFAULT_QR_HINT;
+    if (first) {
+      hint = await readQrHint(page);
+      persistQr(first.buf, hint);
+      openQrViewers();
+      logger.ok(`二维码已落地：${QR_PNG}（VSCode 标签）+ ${QR_HTML}（浏览器）`);
+      logger.info(`定位方式：${first.how}${first.entry ? `（入口 ${first.entry}）` : ''}；${hint}（最长 ${Math.round(timeoutMs / 1000)}s）`);
+    } else {
+      // 拿不到码不等于登录无路可走：窗口就在眼前，页面本身还提供短信验证码等方式。
+      // 与其关掉窗口报错退出，不如留着让用户手动登完，登录态照样持久化。
       try {
         atomicWrite(QR_DIAGNOSTIC_PNG, await page.screenshot());
-        logger.error(`未找到已加载的登录二维码，未生成扫码文件。页面诊断图：${QR_DIAGNOSTIC_PNG}`);
+        logger.warn(`未找到已加载的登录二维码，未生成扫码文件。页面诊断图：${QR_DIAGNOSTIC_PNG}`);
       } catch (e) {
-        logger.error(`未找到已加载的登录二维码，且诊断截图失败：${e.message}`);
+        logger.warn(`未找到已加载的登录二维码，且诊断截图失败：${e.message}`);
       }
-      return false;
+      logger.info(`已尝试的扫码入口：${tried.length ? tried.join('、') : '页面上一个都没有'}`);
+      logger.info(`请直接在弹出的 boss 专用 Chrome 窗口里用页面提供的方式登录（短信验证码等），完成后本命令自动接管（最长 ${Math.round(timeoutMs / 1000)}s）`);
+      await page.send('Page.bringToFront').catch(() => {});
     }
-    persistQr(first.buf);
-    openQrViewers();
-    logger.ok(`二维码已落地：${QR_PNG}（VSCode 标签）+ ${QR_HTML}（浏览器）`);
-    logger.info(`定位方式：${first.how}；请用「微信」扫码（最长 ${Math.round(timeoutMs / 1000)}s）`);
 
     const deadline = Date.now() + timeoutMs;
     let logged = false;
@@ -250,10 +330,12 @@ async function login({ timeoutMs = 600000 } = {}) {
         logged = true;
         break;
       }
+      if (!first) continue; // 手动登录模式：只等页面登录标志，不再落地二维码
       // 只刷新真实二维码；跳转过程中暂时不存在二维码时保留上一张。
       try {
+        await refreshExpiredQr(page);
         const qr = await captureQr(page);
-        if (qr) persistQr(qr.buf);
+        if (qr) persistQr(qr.buf, hint);
       } catch (_) {
         /* 截图偶发失败不阻断轮询 */
       }
@@ -265,7 +347,9 @@ async function login({ timeoutMs = 600000 } = {}) {
       await sleep(1200); // 给 cookie 落盘留点时间
       return true;
     }
-    logger.error('扫码超时未完成。请重试 boss login，确保用微信扫码并在手机上确认');
+    logger.error(first
+      ? '扫码超时未完成。请重试 boss login，并按二维码上方的页面原文提示扫码确认'
+      : '等待超时，窗口内未完成登录。请重试 boss login 并在专用 Chrome 窗口里完成登录');
     return false;
   } finally {
     await context.close();
@@ -289,4 +373,7 @@ async function logout() {
   }
 }
 
-module.exports = { login, logout, whoami, openWebsite, isLoggedInOnPage, hasLoginCookie, isSessionCookie };
+module.exports = {
+  login, logout, whoami, openWebsite, isLoggedInOnPage, hasLoginCookie, isSessionCookie,
+  acquireQr, readQrHint, refreshExpiredQr,
+};
