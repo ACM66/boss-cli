@@ -1,0 +1,39 @@
+{
+  "source": {
+    "url": "https://www.zhipin.com/web/geek/jobs?query=%E5%90%8E%E7%AB%AF%E5%B7%A5%E7%A8%8B%E5%B8%88&city=101010100",
+    "capturedAt": "2026-09-05T13:54:09.733Z",
+    "note": "真实网页响应前两条的公开岗位字段；已去除会话、HR、追踪字段。"
+  },
+  "code": 0,
+  "zpData": {
+    "jobList": [
+      {
+        "encryptJobId": "b90ee1064f5364600nN60tW5EVtU",
+        "jobName": "后端工程师（实习）",
+        "salaryDesc": "800-1200元/天",
+        "brandName": "北京泽青科创技术...",
+        "cityName": "北京",
+        "areaDistrict": "海淀区",
+        "businessDistrict": "学院路",
+        "jobLabels": [
+          "4天/周",
+          "3个月",
+          "本科"
+        ]
+      },
+      {
+        "encryptJobId": "cf67d42f51ec44060nF93N2_FVJW",
+        "jobName": "后端工程师（Java）CRM方向",
+        "salaryDesc": "18-25K·13薪",
+        "brandName": "润泽园教育",
+        "cityName": "北京",
+        "areaDistrict": "",
+        "businessDistrict": "",
+        "jobLabels": [
+          "5-10年",
+          "学历不限"
+        ]
+      }
+    ]
+  }
+}

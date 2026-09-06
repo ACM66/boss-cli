@@ -6,3 +6,5 @@ log/
 # 浏览器持久化 profile / 登录态绝不入库
 .boss-cli/
 userdata/
+# 本项目的浏览器操作约束需要随仓库共享，覆盖全局 AGENTS.md 忽略规则
+!/AGENTS.md

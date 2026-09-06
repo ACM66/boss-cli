@@ -1,7 +1,7 @@
 {
   "name": "boss-cli",
   "version": "0.1.0",
-  "description": "BOSS 直聘命令行工具：扫码登录、查询岗位、与 HR 打招呼。基于真实浏览器 + 持久化登录态，抵抗反爬。",
+  "description": "BOSS 直聘命令行工具：扫码登录、查询岗位、沟通检查。使用专用 Chrome 保存登录态，提供访问预算与异常暂停。",
   "type": "commonjs",
   "bin": {
     "boss": "bin/boss.js"
@@ -10,17 +10,19 @@
     "bin/",
     "src/",
     "README.md",
+    "AGENTS.md",
     "LICENSE"
   ],
   "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:e2e": "node tests/e2e-readonly.js",
     "postinstall": "node -e \"console.log('提示：首次使用请先运行  boss login  扫码登录')\""
   },
   "dependencies": {
-    "commander": "^12.1.0",
-    "playwright": "^1.49.0"
+    "commander": "^12.1.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "keywords": [
     "boss",
@@ -29,7 +31,6 @@
     "招聘",
     "求职",
     "cli",
-    "playwright",
     "job-search"
   ],
   "license": "MIT"

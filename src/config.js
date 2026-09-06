@@ -15,6 +15,7 @@ const BASE_URL = 'https://www.zhipin.com';
 
 // 登录入口（求职者侧）
 const LOGIN_URL = `${BASE_URL}/web/user/?ka=header-login`;
+const SEARCH_URL = `${BASE_URL}/web/geek/jobs`;
 // 求职者推荐页（需要登录态，用作登录态探测）
 const RECOMMEND_URL = `${BASE_URL}/web/geek/recommend`;
 
@@ -43,11 +44,22 @@ const CITY_CODES = {
   青岛: '101120200',
 };
 
-// ⚠️ 选择器校准状态：登录态下的搜索结果页 / 岗位详情页 / 打招呼按钮 / 聊天输入框
-// 这些选择器为“先验值”，截至 2026-06-03 仅验证了首页可达，尚未在真实登录态下校准。
-// 首次使用务必用 --show 跑一遍 search/show/greet 校准（方法见 README「选择器校准」）。
-// 校准通过后把下面改成日期字符串（如 '2026-06-10'），运行时即不再提示风险。
-const SELECTORS_CALIBRATED_AT = null;
+// 按操作记录真实页面验收；查询和发送前检查通过不代表消息发送已验收。
+const SELECTORS_CALIBRATED_AT = { search: '2026-09-05', detail: '2026-09-05', greet: null };
+
+// 本工具的保守访问预算，不代表平台公布或验证过的安全阈值。
+const ACCESS_POLICY = {
+  navigationIntervalMs: 15000,
+  writeIntervalMs: 60000,
+  maxNavigationsPerHour: 30,
+  maxNavigationsPerDay: 200,
+  maxWritesPerDay: 10,
+  maxNavigationEventsPerMinute: 8,
+  maxApiResponsesPerMinute: 120,
+  cooldownMs: 30 * 60 * 1000,
+  recoveryBufferMs: 5 * 60 * 1000,
+  cacheTtlMs: 5 * 60 * 1000,
+};
 
 // 集中管理页面选择器：BOSS 前端是 SPA，DOM 会随版本漂移。
 // 每个语义都给一组候选选择器，按顺序兜底，便于后续单点维护。
@@ -55,17 +67,21 @@ const SELECTORS = {
   // 首页/任意页判断是否已登录：登录入口存在 = 未登录
   loginEntry: ['.header-login-btn', 'a[ka="header-login"]', '.nav-figure .login-text'],
   // 已登录后头像/用户菜单
-  loggedInMark: ['.nav-figure img', '.user-nav', '.geek-nav'],
+  loggedInMark: ['.nav-figure a[ka="header-username"] img'],
   // 搜索结果岗位卡片
-  jobCard: ['.job-card-wrapper', '.job-list-box .job-card-box', 'li.job-primary'],
+  jobCard: ['.job-card-box', '.job-card-wrapper', 'li.job-primary'],
   // 卡片内字段（相对卡片根）
   jobName: ['.job-name', '.job-title .job-name', '.name .job-name'],
-  jobSalary: ['.salary', '.job-limit .red', '.job-title .salary'],
+  jobSalary: ['.job-salary', '.salary', '.job-limit .red'],
   jobArea: ['.job-area', '.job-area-wrapper .job-area', '.company-location'],
   jobLink: ['a.job-card-left', 'a.job-card-body', 'a[href*="/job_detail/"]', 'a[ka^="search_list"]'],
-  jobCompany: ['.company-name', '.company-info .company-name', '.company-text .name'],
+  jobCompany: ['.boss-name', '.company-name', '.company-info .company-name', '.company-text .name'],
   jobTags: ['.tag-list li', '.tag-list span', '.company-tag-list li'],
   jobExp: ['.job-info .tag-list li:nth-child(1)', '.job-card-footer .tag-list li'],
+  detailName: ['.job-banner .name h1'],
+  detailSalary: ['.job-banner .salary'],
+  detailCompany: ['.sider-company a[ka^="job-detail-company_"]', '.sider-company .company-info a[title]'],
+  detailDesc: ['.job-detail .job-sec-text', '.job-sec-text'],
   // 岗位详情页：发起沟通按钮（打招呼）
   startChat: [
     '.btn.btn-startchat',
@@ -83,14 +99,14 @@ const SELECTORS = {
 // 分两类，给出不同的处置建议：
 //  - captcha：滑块/验证码 → 需在窗口里手动完成验证
 //  - wall：访问受限 / 需登录 / IP 频控（如 /web/passport/zp/403.html）
-//          → 先登录；已登录则是触发频控，需冷却等待
+//          → 停止访问并按平台提示处理，无法仅凭此页面确定风控根因
 // 实证来源（2026-06-03）：logged-out 访问 /web/geek/job 被跳到 403 页，
 // 文案「访问受限…您的 IP 存在异常行为，请登录后使用…将于 HH:MM 恢复正常」。
 const RISK_SIGNALS = {
-  captchaUrlParts: ['/web/common/security-check', 'verify-slider', '/safe/verify', 'captcha'],
+  captchaUrlParts: ['/web/common/security-check', '/web/passport/zp/security.html', 'verify-slider', '/safe/verify', 'captcha'],
   captchaTexts: ['安全验证', '完成验证', '滑动验证', '拖动下方滑块', 'security check', '请完成以下验证'],
   wallUrlParts: ['/web/passport/zp/403', 'passport/zp/403', '/passport/error'],
-  wallTexts: ['访问受限', '无法访问此页面', 'IP 存在异常', '禁止访问', '请登录后使用', '违规访问行为', '恢复正常'],
+  wallTexts: ['访问受限', '暂时无法访问此页面', 'IP 存在异常', '暂时被禁止访问', '违规访问行为'],
 };
 
 module.exports = {
@@ -100,9 +116,11 @@ module.exports = {
   LOG_DIR,
   BASE_URL,
   LOGIN_URL,
+  SEARCH_URL,
   RECOMMEND_URL,
   CITY_CODES,
   SELECTORS,
   SELECTORS_CALIBRATED_AT,
+  ACCESS_POLICY,
   RISK_SIGNALS,
 };

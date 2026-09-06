@@ -107,14 +107,14 @@ function pad(s, width) {
   return s + ' '.repeat(Math.max(0, diff));
 }
 
-// 选择器未校准时，每个进程提示一次。提醒用户结果可能不准、且如何校准。
+// 尚未完成真实验收的能力，每个进程提示一次。
 let calibWarned = false;
-function warnIfUncalibrated() {
-  if (calibWarned || SELECTORS_CALIBRATED_AT) return;
+function warnIfUncalibrated(operation = 'greet') {
+  if (calibWarned || SELECTORS_CALIBRATED_AT[operation]) return;
   calibWarned = true;
   logger.warn(
-    '页面选择器尚未在真实登录态下校准，搜索/打招呼结果可能不准或失效。' +
-      '首次使用请加 --show 跑一遍并对照浏览器校准（方法见 README「选择器校准」）。'
+    `${operation} 尚未完成真实端到端验收，验证范围见 README「已验证的范围」。` +
+      (operation === 'greet' ? '可先加 --dry-run 检查岗位和沟通按钮。' : '')
   );
 }
 
